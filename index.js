@@ -45,6 +45,7 @@ app.get('/', function (request, response) {
 
 const database = admin.database();
 const userPath = "users/{0}";
+const connectionPath = "connections/{0}";
 
 /**
  * Request to obtain user information associated with a provided {@code UID}.
@@ -207,6 +208,54 @@ app.delete('/users', function (req, res) {
             .then(function () {
                 res.send(msg);
                 console.log(msgTemplate.format(req.body.uid, res.statusCode, msg));
+            });
+    }
+});
+
+/**
+ * Request to obtain a list of a user's connections.
+ *
+ * @GET
+ * query: {
+ *     uid: @required @type {string}
+ * }
+ *
+ * @200, 204
+ * response: {
+ *     $key: $uid
+ * }
+ *
+ * @400, 403, 500
+ * response: error
+ */
+app.get('/connections', function (req, res) {
+    let msg, msgTemplate = "GET connections/{0} : {1}, {2}";
+    if (!req.query.uid) {
+        msg = "Cannot find user ID";
+        res.status(400);
+        res.send(msg);
+        console.log(msgTemplate.format(null, res.statusCode, msg));
+    } else {
+        database
+            .ref(connectionPath.format(req.query.uid))
+            .once('value', function (snapshot) {
+                if (!snapshot.val()) {
+                    msg = "No user connections";
+                    res.status(204);
+                    res.json({});
+                } else {
+                    msg = "Retrieved {0} connections".format(snapshot.numChildren());
+                    res.status(200);
+                    res.json(snapshot.val());
+                }
+            })
+            .catch(function (error) {
+                msg = error.toString();
+                res.status(403);
+                res.send(msg);
+            })
+            .then(function () {
+                console.log(msgTemplate.format(req.query.uid, res.statusCode, msg));
             });
     }
 });
