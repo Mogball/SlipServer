@@ -24,7 +24,7 @@ const authAdmin = {
 const authUser = {
     credential: admin.credential.cert(service),
     databaseURL: "https://slip-8e306.firebaseio.com",
-    databaseAuthVariableOverride: {
+    databaseAuthletiableOverride: {
         uid: "slip-server-admin"
     }
 };
@@ -46,6 +46,7 @@ app.get('/', function (request, response) {
 const database = admin.database();
 const userPath = "users/{0}";
 const connectionPath = "connections/{0}";
+const messagePath = "messages";
 
 /**
  * Request to obtain user information associated with a provided {@code UID}.
@@ -260,6 +261,23 @@ app.get('/connections', function (req, res) {
     }
 });
 
+app.get('/messages', function (req, res) {
+    let msg, msgTemplate = "GET messages : {0}, {1}";
+    if (!req.query.lat || !req.query.lon) {
+        msg = "Null latitude or longitude";
+        res.status(400);
+        res.send(msg);
+        console.log(msgTemplate.format(res.statusCode, msg));
+        return;
+    }
+    database.ref(messagePath).once('value', function (snapshot) {
+        snapshot.forEach(function (child) {
+            const key = child.key;
+            const data = child.val();
+        });
+    });
+});
+
 /**
  * Open the server port and listen to requests
  * @type {http.Server}
@@ -269,3 +287,136 @@ const server = app.listen(app.get('port'), function () {
     const port = server.address().port;
     console.log("Slip server listening on http://%s:%s", host, port);
 });
+
+
+let quadtree = {};
+
+quadtree.encode = function (coordinate, precision) {
+
+    let origin = {lng: 0, lat: 0};
+    let range = {lng: 180, lat: 90};
+
+    let result = '';
+
+    while (precision > 0) {
+        range.lng /= 2;
+        range.lat /= 2;
+
+        if ((coordinate.lng < origin.lng) && (coordinate.lat >= origin.lat)) {
+            origin.lng -= range.lng;
+            origin.lat += range.lat;
+            result += '0';
+        } else if ((coordinate.lng >= origin.lng) && (coordinate.lat >= origin.lat)) {
+            origin.lng += range.lng;
+            origin.lat += range.lat;
+            result += '1';
+        } else if ((coordinate.lng < origin.lng) && (coordinate.lat < origin.lat)) {
+            origin.lng -= range.lng;
+            origin.lat -= range.lat;
+            result += '2';
+        } else {
+            origin.lng += range.lng;
+            origin.lat -= range.lat;
+            result += '3';
+        }
+
+        --precision;
+    }
+
+    return result;
+};
+
+quadtree.decode = function (encoded) {
+    let origin = {lng: 0, lat: 0};
+    let error = {lng: 180, lat: 90};
+
+    let precision = encoded.length;
+    let currentPrecision = 0;
+
+    while (currentPrecision < precision) {
+        error.lng /= 2;
+        error.lat /= 2;
+
+        let quadrant = encoded[currentPrecision];
+        if (quadrant === '0') {
+            origin.lng -= error.lng;
+            origin.lat += error.lat;
+        } else if (quadrant === '1') {
+            origin.lng += error.lng;
+            origin.lat += error.lat;
+        } else if (quadrant === '2') {
+            origin.lng -= error.lng;
+            origin.lat -= error.lat;
+        } else {
+            origin.lng += error.lng;
+            origin.lat -= error.lat;
+        }
+
+        ++currentPrecision;
+    }
+
+    return {origin: origin, error: error};
+};
+
+quadtree.neighbour = function (encoded, north, east) {
+    let decoded = quadtree.decode(encoded);
+    let neighbour = {
+        lng: decoded.origin.lng + decoded.error.lng * east * 2,
+        lat: decoded.origin.lat + decoded.error.lat * north * 2
+    };
+
+    return quadtree.encode(neighbour, encoded.length);
+};
+
+quadtree.bbox = function (encoded) {
+    let decoded = quadtree.decode(encoded);
+
+    return {
+        minlng: decoded.origin.lng - decoded.error.lng,
+        minlat: decoded.origin.lat - decoded.error.lat,
+        maxlng: decoded.origin.lng + decoded.error.lng,
+        maxlat: decoded.origin.lat + decoded.error.lat
+    };
+};
+
+quadtree.envelop = function (bbox, precision) {
+    let end = quadtree.encode({lng: bbox.maxlng, lat: bbox.maxlat}, precision);
+
+    let rowStart = quadtree.encode({lng: bbox.minlng, lat: bbox.minlat}, precision);
+    let rowEnd = quadtree.encode({lng: bbox.maxlng, lat: bbox.minlat}, precision);
+
+    let current = rowStart;
+
+    let quadtrees = [];
+    while (true) {
+        while (current != rowEnd) {
+            quadtrees.push(current);
+            current = quadtree.neighbour(current, 0, 1);
+        }
+
+        if (current == end) break;
+
+        quadtrees.push(rowEnd);
+
+        rowEnd = quadtree.neighbour(rowEnd, 1, 0);
+        rowStart = quadtree.neighbour(rowStart, 1, 0);
+        current = rowStart;
+    }
+
+    quadtrees.push(end);
+    return quadtrees;
+};
+
+if (typeof module !== 'undefined' && typeof module.exports !== 'undefined') {
+    module.exports = quadtree;
+}
+else {
+    if (typeof define === 'function' && define.amd) {
+        define([], function () {
+            return quadtree;
+        });
+    }
+    else {
+        window.quadtree = quadtree;
+    }
+}
